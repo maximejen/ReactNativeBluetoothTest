@@ -1,6 +1,8 @@
 import React from "react";
-import { BleManager, Device } from "react-native-ble-plx";
+import { BleError, BleManager, Characteristic, Device } from "react-native-ble-plx";
 import { Buffer } from "buffer";
+import { DevicesList } from "./DevicesList";
+import storage from "../../storage/storage";
 
 const BluetoothContext: React.Context<any> = React.createContext(null);
 
@@ -8,50 +10,63 @@ interface BluetoothContextProviderProps {
 	children: JSX.Element | JSX.Element[];
 }
 
+export type DeviceIsConnectableFuncType = (device: Device) => boolean;
+export type ConnectFuncType = (device: Device) => Promise<Device>;
+export type DisconnectFuncType = (device: Device) => Promise<Device>;
+
+export interface BleCtxValueType {
+	manager: BleManager;
+	connectToDevice: ConnectFuncType;
+	devicesList: DevicesList;
+	scannedDevicesList: DevicesList;
+	disconnectFromDevice: DisconnectFuncType;
+	deviceIsConnectable: DeviceIsConnectableFuncType;
+}
+
 const BluetoothContextProvider: React.FunctionComponent<BluetoothContextProviderProps> = ({ children }) => {
 	const managerRef = React.useRef<BleManager>(new BleManager());
 
-	const [devices, setDevices] = React.useState<Device[]>([]);
-	const devicesRef = React.useRef<Device[]>([]);
+	const devicesList = React.useRef<DevicesList>(new DevicesList());
+	const scannedDevicesList = React.useRef<DevicesList>(new DevicesList());
 
+	// Adds the storage devices to the devicesList.
 	React.useEffect(() => {
-		console.log("Construct BluetoothContextProvider");
-		return () => {
-			console.log("Destroy BluetoothContextProvider");
-		};
+		storage
+			.load({
+				key: "devicesList",
+			})
+			.then((data: Device[]) => {
+				data.forEach((device: Device) => {
+					devicesList.current.addOrReplace(device);
+				});
+			})
+			.catch((e) => {
+				if (e.name !== "NotFoundError") console.log("Error loading data from storage :", e.message);
+			});
 	}, []);
 
-	const addOrReplaceDeviceInList = React.useCallback((device: Device) => {
-		const devices = devicesRef.current;
-		if (!device.id || (!device.name && !device.localName)) return devices;
-		const deviceIdx = devices.findIndex((d) => d.id === device.id);
-		let tmp = devices;
-		if (deviceIdx === -1) tmp = devices.concat([device]);
-		else tmp[deviceIdx] = device;
-		setDevices(tmp);
-		devicesRef.current = tmp;
-		return tmp;
-	}, []);
-
-	const removeDeviceFromList = React.useCallback((device: Device) => {
-		const devices = devicesRef.current;
-		const deviceIdx = devices.findIndex((d) => d.id === device.id);
-		let tmp = devices;
-		if (deviceIdx !== -1) {
-			tmp = devices.filter((d) => d.id !== device.id);
-			setDevices(tmp);
-			devicesRef.current;
+	// Ensures the update of the devicesList in the AsyncStorage
+	React.useEffect(() => {
+		if (devicesList) {
+			const onListChange = (list) => {
+				storage.save({ key: "devicesList", data: list.devices }).catch((e) => {
+					console.log("Error while syncing devicesList in storage :", e.message);
+				});
+			};
+			devicesList.current.subscribeToListChange(onListChange);
+			return () => {
+				devicesList.current.unsubscribeToListChange(onListChange);
+			};
 		}
-		return tmp;
+	}, [devicesList]);
+
+	const deviceIsConnectable = React.useCallback<DeviceIsConnectableFuncType>((device: Device) => {
+		if (!device) return false;
+		return device.connect !== undefined && typeof device.connect === "function";
 	}, []);
 
-	const getDevice = React.useCallback((deviceId) => {
-		return devicesRef.current.find((d) => d.id === deviceId);
-	}, []);
-
-	const connectToDevice = React.useCallback(async (deviceId) => {
-		const device = getDevice(deviceId);
-		if (!device) throw new Error("[connectToDevice]: Cannot find device.");
+	const connectToDevice = React.useCallback<ConnectFuncType>(async (device: Device) => {
+		if (!device) throw new Error("[connectToDevice]: invalid device.");
 		const connectedDevice = await device.connect({
 			autoConnect: false,
 		});
@@ -60,19 +75,38 @@ const BluetoothContextProvider: React.FunctionComponent<BluetoothContextProvider
 		if (!connectedAndDiscoveredDevice)
 			throw new Error("[connectToDevice]: Could not discover Services and Characteristics.");
 		// add the device connected with services and characteristics in the context data.
-		addOrReplaceDeviceInList(connectedAndDiscoveredDevice);
+		devicesList.current.addOrReplace(connectedAndDiscoveredDevice);
+
+		// Add Event Listener on disconnection to update the lists of devices and ensure it's up-to-date.
+		connectedAndDiscoveredDevice.onDisconnected((error: BleError | null, updatedDevice: Device) => {
+			console.log(`Device disconnected : ${updatedDevice.id} (${updatedDevice.name})`);
+			if (error) {
+				console.log(`Error : ${error.message}`);
+			}
+			devicesList.current.addOrReplace(connectedAndDiscoveredDevice);
+		});
+
 		return connectedAndDiscoveredDevice;
+	}, []);
+
+	const disconnectFromDevice = React.useCallback<DisconnectFuncType>(async (device: Device) => {
+		if (!device) throw new Error("[disconnectToDevice]: invalid device.");
+		const connectedDevice = await device.connect({
+			autoConnect: false,
+		});
+		if (!connectedDevice) return device;
+		return device.cancelConnection();
 	}, []);
 
 	return (
 		<BluetoothContext.Provider
 			value={{
 				manager: managerRef.current,
-				devices,
-				addOrReplaceDeviceInList,
-				removeDeviceFromList,
-				getDevice,
 				connectToDevice,
+				devicesList: devicesList.current,
+				scannedDevicesList: scannedDevicesList.current,
+				disconnectFromDevice,
+				deviceIsConnectable,
 			}}
 		>
 			{children}
@@ -94,21 +128,66 @@ export const useBluetoothManager = () => {
 	}, [bluetoothCtx]);
 };
 
-export const bleServicesInfo = {
+export interface ICharacteristic {
+	name: string;
+	uuid: string;
+	getValue: (characteristic: Characteristic) => any;
+}
+
+export interface IService {
+	uuid: string;
+	characteristics: ICharacteristic[];
+}
+
+export interface IBluetoothInterface {
+	ledControl: IService;
+}
+
+export const bleServicesInfo: IBluetoothInterface = {
 	ledControl: {
-		uuid: "176f60d7-5506-4b60-a4d3-3464082ea944",
-		characteristics: {
-			pattern: {
+		uuid: "98294635-40dd-4094-a095-3464082ea944",
+		characteristics: [
+			{
+				name: "pattern",
 				uuid: "98294635-40dd-4094-a095-d866ad327621",
 				getValue: (characteristic) => {
-					if (characteristic.uuid !== bleServicesInfo.ledControl.characteristics.pattern.uuid) {
+					if (characteristic.uuid !== bleServicesInfo.ledControl.characteristics[0].uuid) {
 						return "Invalid characteristic";
 					}
 					const value = new Buffer(characteristic.value, "base64");
-					console.log('Characteristic["pattern"] value :', value.readInt8());
+					console.log('Characteristic["pattern"] value :', value.toString(), characteristic.value);
+					console.log('Characteristic["pattern"] int8 :', value.readInt8());
 					return value.readInt8();
 				},
 			},
-		},
+			{
+				name: "brightness",
+				uuid: "98294635-40dd-4094-a095-0242ac120002",
+				getValue: (characteristic) => {
+					if (characteristic.uuid !== bleServicesInfo.ledControl.characteristics[1].uuid) {
+						return "Invalid characteristic";
+					}
+					console.log("Characteristic[\"brightness\"] base64 :", characteristic.value);
+					const value = new Buffer(characteristic.value, "base64");
+					console.log('Characteristic["brightness"] value :', value.toString(), characteristic.value);
+					console.log('Characteristic["brightness"] int :', value.readInt8());
+					return value.readInt8();
+				},
+			},
+			{
+				name: "fps",
+				uuid: "98294635-40dd-4094-a095-0242ac120003",
+				getValue: (characteristic) => {
+					if (characteristic.uuid !== bleServicesInfo.ledControl.characteristics[2].uuid) {
+						return "Invalid characteristic";
+					}
+					console.log("Characteristic[\"fps\"] base64 :", characteristic.value);
+					const value = new Buffer(characteristic.value, "base64");
+					console.log('Characteristic["fps"] value :', value.toString(), characteristic.value);
+					console.log('Characteristic["fps"] int :', value.readInt8());
+					return value.readInt8();
+				},
+			},
+		],
 	},
 };

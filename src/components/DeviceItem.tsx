@@ -1,31 +1,27 @@
 import React from "react";
 import { BleError, Device } from "react-native-ble-plx";
-import { ListItem } from "@rneui/themed";
+import { ListItem, ListItemProps } from "@rneui/themed";
 import { Badge } from "@rneui/base";
 import { ActivityIndicator, StyleSheet, TouchableHighlight, View } from "react-native";
+import useIsDeviceConnected from "../helpers/useIsDeviceConnected";
 
-interface Props {
+interface Props extends ListItemProps {
 	device: Device;
 	onPress?: () => void | undefined;
 	onDisconnected?: (error: BleError, device: Device) => void | undefined;
+	showAvailability?: boolean;
+	children?: JSX.Element | JSX.Element[];
 }
 
-const ScannedDevice: React.FunctionComponent<Props> = ({ device, onPress, onDisconnected, ...props }) => {
-	const [isConnected, setIsConnected] = React.useState<undefined | boolean>(undefined);
-
-	React.useEffect(() => {
-		if (device) {
-			setIsConnected(undefined);
-			console.log(device.name, device.rssi);
-			device.isConnected().then((connected) => {
-				setIsConnected(connected);
-			});
-			device.onDisconnected((error, device) => {
-				setIsConnected(false);
-				onDisconnected && onDisconnected(error, device);
-			});
-		}
-	}, [device]);
+const DeviceItem: React.FunctionComponent<Props> = ({
+	device,
+	onPress,
+	onDisconnected,
+	showAvailability = true,
+	children,
+	...props
+}) => {
+	const [isConnected] = useIsDeviceConnected(device);
 
 	if (!device) return null;
 
@@ -33,8 +29,8 @@ const ScannedDevice: React.FunctionComponent<Props> = ({ device, onPress, onDisc
 	const secondaryLabel = device.localName && device.localName !== device.name ? device.localName : undefined;
 
 	const contentJSX = (
-		<ListItem bottomDivider>
-			<Badge status={device.isConnectable ? "success" : !device.rssi ? "error" : "warning"} />
+		<ListItem bottomDivider {...props}>
+			{showAvailability && <Badge status={device.isConnectable ? "success" : "warning"} />}
 			<ListItem.Content>
 				<ListItem.Title style={styles.primaryLabel}>{primaryLabel}</ListItem.Title>
 				{secondaryLabel && <ListItem.Subtitle style={styles.secondaryLabel}>{secondaryLabel}</ListItem.Subtitle>}
@@ -48,21 +44,16 @@ const ScannedDevice: React.FunctionComponent<Props> = ({ device, onPress, onDisc
 					/>
 				)}
 			</View>
-			<ListItem.Chevron
-				type={"material"}
-				name={isConnected === true ? "info-outline" : device.rssi !== null ? "chevron-right" : "close"}
-				size={18}
-			/>
+			{children}
 		</ListItem>
 	);
 
-	if (device.rssi === null) return contentJSX;
+	// if (device.rssi === null) return contentJSX;
 
 	return (
 		<TouchableHighlight
 			onPress={() => {
-				console.log(device.id, device.name, device.localName);
-				if (device.rssi !== null) onPress && onPress();
+				onPress && onPress();
 			}}
 		>
 			{contentJSX}
@@ -70,7 +61,7 @@ const ScannedDevice: React.FunctionComponent<Props> = ({ device, onPress, onDisc
 	);
 };
 
-export default ScannedDevice;
+export default DeviceItem;
 
 const styles = StyleSheet.create({
 	badgesContainer: {

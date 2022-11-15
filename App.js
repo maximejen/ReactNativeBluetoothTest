@@ -2,11 +2,11 @@ import React from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { StatusBar } from "expo-status-bar";
-import ScanDevicesScreen from "./src/bluetooth/scanDevices/ScanDevicesScreen";
 import BluetoothContextProvider from "./src/bluetooth/context/BluetoothContextProvider";
 import { createTheme, ThemeProvider } from "@rneui/themed";
 import ConnectToDeviceScreen from "./src/bluetooth/ConnectToDeviceScreen";
-import ListDevicesScreen from "./src/bluetooth/ListDevicesScreen";
+import ListDevicesScreen from "./src/bluetooth/listDevices/ListDevicesScreen";
+import DevicePageScreen from "./src/bluetooth/device/DevicePageScreen";
 
 const theme = createTheme({
 	components: {
@@ -27,7 +27,7 @@ export default function App() {
 					<Stack.Navigator initialRouteName="ListDevices">
 						<Stack.Group>
 							<Stack.Screen name="ListDevices" component={ListDevicesScreen} />
-							<Stack.Screen name="ScanDevices" component={ScanDevicesScreen} />
+							<Stack.Screen name="DevicePage" component={DevicePageScreen} />
 						</Stack.Group>
 						<Stack.Group screenOptions={{ presentation: "modal" }}>
 							<Stack.Screen
